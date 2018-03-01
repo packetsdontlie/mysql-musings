@@ -1,0 +1,60 @@
+delimiter //
+
+CREATE PROCEDURE ticketstatbaseline  (paramEmployee INT)
+
+BEGIN
+
+set @myEmployee=paramEmployee;
+set @myPercentile=.9;
+set @myTimeWindowHours=1000000000;
+set @myReportType="baseline";
+
+prepare stmtEmployee from 'set @myName=(select concat(left(sFName,1), sLName) as empName from HS_Person where xPerson = ?)';
+execute stmtEmployee using @myEmployee;
+
+prepare stmtMyLimit from 'set @myLimit=(select floor(count(xRequest)*?) from HS_Request where xPersonAssignedTo=? and fOpen=0 and ((unix_timestamp(current_timestamp)-dtGMTClosed)/60/60) <= ?)';
+execute stmtMyLimit using @myPercentile, @myEmployee, @myTimeWindowHours;
+SET @myLimit = CONVERT(@myLimit, SIGNED);
+
+prepare stmtPercentileValue from 'set @myPercentileValue=(select ((dtGMTClosed-dtGMTOpened)/60/60) as duration from HS_Request where fOpen=0 and xPersonAssignedTo=? and ((unix_timestamp(current_timestamp)-dtGMTClosed)/60/60) <= ? order by ((dtGMTClosed-dtGMTOpened)/60/60) asc limit 1 offset ?)';
+execute stmtPercentileValue using @myEmployee, @myTimeWindowHours, @myLimit;
+
+prepare stmtSigma from 'set @mySigma=(select floor(stddev((dtGMTClosed-dtGMTOpened)/60/60)) as stdDuration from HS_Request where xPersonAssignedTo=? and fOpen=0 and ((unix_timestamp(current_timestamp)-dtGMTClosed)/60/60) <= ? and ((dtGMTClosed-dtGMTOpened)/60/60) < ?)';
+execute stmtSigma using @myEmployee, @myTimeWindowHours, @myPercentileValue;
+
+prepare stmtAverage from 'set @myAverage=(select floor(avg((dtGMTClosed-dtGMTOpened)/60/60)) as stdDuration from HS_Request where xPersonAssignedTo=? and fOpen=0 and ((unix_timestamp(current_timestamp)-dtGMTClosed)/60/60) <= ? and ((dtGMTClosed-dtGMTOpened)/60/60) < ?)';
+execute stmtAverage using @myEmployee, @myTimeWindowHours, @myPercentileValue;
+
+prepare stmtTotal from 'set @myTotal=(select count(xRequest) as totalPercentile from HS_Request where xPersonAssignedTo=? and fOpen=0 and ((unix_timestamp(current_timestamp)-dtGMTClosed)/60/60) <= ? and ((dtGMTClosed-dtGMTOpened)/60/60) < ?)';
+execute stmtTotal using @myEmployee, @myTimeWindowHours, @myPercentileValue;
+
+set @myConfidenceLevel1=1;
+prepare stmtConfidence1 from 'set @myConfidence1=(select floor(100*(count(xRequest)/?)) as ConfidenceLevel from HS_Request where xPersonAssignedTo=? and fOpen=0 and ((unix_timestamp(current_timestamp)-dtGMTClosed)/60/60) <= ? and ((dtGMTClosed-dtGMTOpened)/60/60) < (?+(?*?)))';
+execute stmtConfidence1 using @myTotal, @myEmployee, @myTimeWindowHours, @myAverage, @mySigma, @myConfidenceLevel1;
+
+set @myConfidenceLevel2=2;
+prepare stmtConfidence2 from 'set @myConfidence2=(select floor(100*(count(xRequest)/?)) as ConfidenceLevel from HS_Request where xPersonAssignedTo=? and fOpen=0 and ((unix_timestamp(current_timestamp)-dtGMTClosed)/60/60) <= ? and ((dtGMTClosed-dtGMTOpened)/60/60) < (?+(?*?)))';
+execute stmtConfidence2 using @myTotal, @myEmployee, @myTimeWindowHours, @myAverage, @mySigma, @myConfidenceLevel2;
+
+set @myConfidenceLevel3=3;
+prepare stmtConfidence3 from 'set @myConfidence3=(select floor(100*(count(xRequest)/?)) as ConfidenceLevel from HS_Request where xPersonAssignedTo=? and fOpen=0 and ((unix_timestamp(current_timestamp)-dtGMTClosed)/60/60) <= ? and ((dtGMTClosed-dtGMTOpened)/60/60) < (?+(?*?)))';
+execute stmtConfidence3 using @myTotal, @myEmployee, @myTimeWindowHours, @myAverage, @mySigma, @myConfidenceLevel3;
+
+prepare stmtTicketEntries from 'set @myTicketEntries=(select count(xRequest) from HS_Request_History where xPerson=? and ((unix_timestamp(current_timestamp)-dtGMTChange)/60/60) <= ?)';
+execute stmtTicketEntries using @myEmployee, @myTimeWindowHours;
+
+prepare stmtTicketsWorked from 'set @myTicketsWorked=(select count(distinct(xRequest)) from HS_Request_History where xPerson=? and ((unix_timestamp(current_timestamp)-dtGMTChange)/60/60) <= ?)';
+execute stmtTicketsWorked using @myEmployee, @myTimeWindowHours;
+
+prepare stmtTicketForwards from 'set @myTicketForwards=(select count(xRequest) from HS_Request_History where tLog like "Reassigned%" and xPerson=? and ((unix_timestamp(current_timestamp)-dtGMTChange)/60/60) <= ?)';
+execute stmtTicketForwards using @myEmployee, @myTimeWindowHours;
+
+
+prepare stmtReport from 'select ? as Type, ? as Name, ? as AvgHrs, ? as Sigma, ? as Total, ? as 1CL, ? as 2CL, ? as 3CL, ? as Entries, ? as UniqTix, ? as Fwds';
+execute stmtReport using @myReportType, @myName, @myAverage, @mySigma, @myTotal, @myConfidence1, @myConfidence2, @myConfidence3, @myTicketEntries, @myTicketsWorked, @myTicketForwards;
+
+END;
+
+//
+
+delimiter ;
